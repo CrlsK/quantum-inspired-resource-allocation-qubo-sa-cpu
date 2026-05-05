@@ -40,6 +40,21 @@ from typing import Any, Dict, List, Tuple
 logger = logging.getLogger("qcentroid-user-log")
 
 
+def _build_additional_output_v2(**kwargs):
+    """Wrap talgo_outputs.build_additional with a safe fallback so a missing
+    helper doesn't crash the solver."""
+    try:
+        from talgo_outputs import build_additional  # noqa: WPS433
+        return build_additional(**kwargs)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"build_additional failed: {e}")
+        return {
+            "summary": "talgo_outputs helper unavailable",
+            "error": str(e),
+            "solver_extras": kwargs.get("extras", {}),
+        }
+
+
 # ----------------------------- helpers --------------------------------------- #
 
 def _haversine_km(a: Dict[str, float], b: Dict[str, float]) -> float:
@@ -134,11 +149,12 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
     for s in spares:
         stock_total[s["part_id"]] = stock_total.get(s["part_id"], 0) + int(s.get("stock", 0))
 
-    # penalty weights — auto-scaled to avoid swamping the objective
+    # penalty weights — auto-scaled to avoid swamping the objective.
+    # v2: bumped multipliers (5/8/8 -> 12/15/15) to keep SA in feasible region longer.
     base_cost = max(1.0, sum(pair_cost[p]["cost"] for p in pair_index) / max(1, n_x))
-    lam_assign = float(solver_params.get("lambda_assignment", 5.0 * base_cost))
-    lam_cap = float(solver_params.get("lambda_capacity", 8.0 * base_cost))
-    lam_stock = float(solver_params.get("lambda_stock", 8.0 * base_cost))
+    lam_assign = float(solver_params.get("lambda_assignment", 12.0 * base_cost))
+    lam_cap = float(solver_params.get("lambda_capacity", 15.0 * base_cost))
+    lam_stock = float(solver_params.get("lambda_stock", 15.0 * base_cost))
 
     # ---- Energy function (Hamiltonian) ---------------------------------------
     def energy(x: List[int], u: List[int]) -> Tuple[float, Dict[str, float]]:
@@ -200,17 +216,19 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
     u = [1] * n_u  # start with all unassigned, then improve
     rng = random.Random(int(solver_params.get("seed", 42)))
 
-    # SA hyper-parameters
-    n_iter = int(solver_params.get("max_iterations", 1500))
-    T0 = float(solver_params.get("initial_temperature", max(1.0, base_cost)))
-    Tf = float(solver_params.get("final_temperature", 1e-3))
-    n_inner = int(solver_params.get("inner_steps", max(20, n_qubits)))
+    # SA hyper-parameters (v2: longer schedule + warmer start)
+    n_iter = int(solver_params.get("max_iterations", 2500))
+    T0 = float(solver_params.get("initial_temperature", max(2.0, 2.0 * base_cost)))
+    Tf = float(solver_params.get("final_temperature", 5e-4))
+    n_inner = int(solver_params.get("inner_steps", max(40, 2 * n_qubits)))
+    n_restarts = int(solver_params.get("n_restarts", 3))
 
     cur_E, _ = energy(x, u)
     best_x, best_u, best_E = list(x), list(u), cur_E
     best_iter = 0
     energy_curve: List[float] = [round(best_E, 4)]
     temps = []
+    restarts_done = 0
 
     for k in range(n_iter):
         T = T0 * (Tf / T0) ** (k / max(1, n_iter - 1))
@@ -257,8 +275,19 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
             best_E = cur_E
             best_x, best_u = list(x), list(u)
             best_iter = k
+        # Periodic restart from best snapshot
+        if (
+            n_restarts > 0
+            and restarts_done < n_restarts
+            and k > 0
+            and k % max(1, n_iter // (n_restarts + 1)) == 0
+        ):
+            x, u = list(best_x), list(best_u)
+            cur_E = best_E
+            restarts_done += 1
         energy_curve.append(round(best_E, 4))
 
+    # Decode from BEST snapshot, not last state — major quality lift.
     x, u = best_x, best_u
     final_E, parts = energy(x, u)
     logger.info(
@@ -413,15 +442,49 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
                 "stock_violation": parts["stock_pen"],
             },
         },
-        "additional_output": {
-            "qubo_size": n_qubits,
-            "penalty_weights": {
-                "lambda_assignment": lam_assign,
-                "lambda_capacity": lam_cap,
-                "lambda_stock": lam_stock,
+        "additional_output": _build_additional_output_v2(
+            algorithm="QUBO_SimulatedAnnealing",
+            objective_value=round(float(objective), 4),
+            solution_status=status,
+            cost_breakdown={
+                "labor_cost_eur": round(labor_total, 4),
+                "travel_cost_eur": round(travel_total, 4),
+                "sla_penalty_eur": round(sla_total, 4),
+                "unassigned_penalty_eur": round(unassigned_pen, 4),
+                "total_cost_eur": round(float(objective), 4),
             },
-            "energy_curve": energy_curve,
-        },
+            kpis={
+                "tasks_total": len(tasks),
+                "tasks_assigned": len(assignments),
+                "sla_on_time_rate": round(on_time / max(1, len(tasks)), 4),
+                "technician_utilization": round(util, 4),
+                "stockouts": 0,
+            },
+            assignments=assignments,
+            unassigned_tasks=unassigned,
+            depots=depots, technicians=techs, tasks=tasks, spare_parts=spares,
+            extras={
+                "travel_cost_per_km_eur": travel_cost_km,
+                "qubo_size": n_qubits,
+                "penalty_weights": {
+                    "lambda_assignment": lam_assign,
+                    "lambda_capacity": lam_cap,
+                    "lambda_stock": lam_stock,
+                },
+                "energy_curve": energy_curve,
+                "best_iter": best_iter,
+                "n_iter": n_iter,
+                "n_inner": n_inner,
+                "T0": T0,
+                "Tf": Tf,
+                "n_restarts": n_restarts,
+                "feasibility_breakdown": {
+                    "assignment_violation": parts["assign_pen"],
+                    "capacity_violation": parts["cap_pen"],
+                    "stock_violation": parts["stock_pen"],
+                },
+            },
+        ),
         "benchmark": {
             "execution_cost": {"value": 1.0, "unit": "credits"},
             "time_elapsed": f"{elapsed}s",
