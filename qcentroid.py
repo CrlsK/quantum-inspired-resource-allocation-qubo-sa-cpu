@@ -216,12 +216,12 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
     u = [1] * n_u  # start with all unassigned, then improve
     rng = random.Random(int(solver_params.get("seed", 42)))
 
-    # SA hyper-parameters (v2: longer schedule + warmer start)
-    n_iter = int(solver_params.get("max_iterations", 2500))
+    # SA hyper-parameters (v5: 4000 outer steps + 5 restarts for higher-quality escape)
+    n_iter = int(solver_params.get("max_iterations", 4000))
     T0 = float(solver_params.get("initial_temperature", max(2.0, 2.0 * base_cost)))
-    Tf = float(solver_params.get("final_temperature", 5e-4))
-    n_inner = int(solver_params.get("inner_steps", max(40, 2 * n_qubits)))
-    n_restarts = int(solver_params.get("n_restarts", 3))
+    Tf = float(solver_params.get("final_temperature", 1e-4))
+    n_inner = int(solver_params.get("inner_steps", max(60, 3 * n_qubits)))
+    n_restarts = int(solver_params.get("n_restarts", 5))
 
     cur_E, _ = energy(x, u)
     best_x, best_u, best_E = list(x), list(u), cur_E
