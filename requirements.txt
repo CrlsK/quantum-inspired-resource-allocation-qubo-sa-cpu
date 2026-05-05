@@ -1,0 +1,4 @@
+# Quantum-inspired solver — pure Python, only stdlib needed for SA. Listed
+# packages are common siblings already used by other QCentroid solvers and are
+# imported lazily for future hybrid extensions (DWave, Qiskit), so leaving them
+# minimal keeps the build fast.
