@@ -403,8 +403,45 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
         f"wall={elapsed}s, qubits={n_qubits}"
     )
 
+    _ao_preview = _build_additional_output_v2(
+        algorithm="QUBO_SimulatedAnnealing",
+        objective_value=round(float(objective), 4),
+        solution_status=status,
+        cost_breakdown={
+            "labor_cost_eur": round(labor_total, 4),
+            "travel_cost_eur": round(travel_total, 4),
+            "sla_penalty_eur": round(sla_total, 4),
+            "unassigned_penalty_eur": round(unassigned_pen, 4),
+            "total_cost_eur": round(float(objective), 4),
+        },
+        kpis={
+            "tasks_total": len(tasks),
+            "tasks_assigned": len(assignments),
+            "sla_on_time_rate": round(on_time / max(1, len(tasks)), 4),
+            "technician_utilization": round(util, 4),
+            "stockouts": 0,
+        },
+        assignments=assignments, unassigned_tasks=unassigned,
+        depots=depots, technicians=techs, tasks=tasks, spare_parts=spares,
+        extras={
+            "travel_cost_per_km_eur": travel_cost_km, "qubo_size": n_qubits,
+            "penalty_weights": {"lambda_assignment": lam_assign, "lambda_capacity": lam_cap, "lambda_stock": lam_stock},
+            "energy_curve": energy_curve, "best_iter": best_iter,
+            "n_iter": n_iter, "n_inner": n_inner, "T0": T0, "Tf": Tf, "n_restarts": n_restarts,
+            "feasibility_breakdown": {
+                "assignment_violation": parts["assign_pen"],
+                "capacity_violation": parts["cap_pen"],
+                "stock_violation": parts["stock_pen"],
+            },
+        },
+    )
+    _hl = _ao_preview.get("headline_numerics", {}) if isinstance(_ao_preview, dict) else {}
     return {
         "objective_value": round(float(objective), 4),
+        "sla_on_time_rate": round(on_time / max(1, len(tasks)), 4),
+        "technician_utilization": round(util, 4),
+        "total_travel_km": float(_hl.get("total_travel_km", 0.0)),
+        "replenishment_alerts_count": int(_hl.get("replenishment_alerts_count", 0)),
         "solution_status": status,
         "assignments": assignments,
         "unassigned_tasks": unassigned,
@@ -442,49 +479,7 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
                 "stock_violation": parts["stock_pen"],
             },
         },
-        "additional_output": _build_additional_output_v2(
-            algorithm="QUBO_SimulatedAnnealing",
-            objective_value=round(float(objective), 4),
-            solution_status=status,
-            cost_breakdown={
-                "labor_cost_eur": round(labor_total, 4),
-                "travel_cost_eur": round(travel_total, 4),
-                "sla_penalty_eur": round(sla_total, 4),
-                "unassigned_penalty_eur": round(unassigned_pen, 4),
-                "total_cost_eur": round(float(objective), 4),
-            },
-            kpis={
-                "tasks_total": len(tasks),
-                "tasks_assigned": len(assignments),
-                "sla_on_time_rate": round(on_time / max(1, len(tasks)), 4),
-                "technician_utilization": round(util, 4),
-                "stockouts": 0,
-            },
-            assignments=assignments,
-            unassigned_tasks=unassigned,
-            depots=depots, technicians=techs, tasks=tasks, spare_parts=spares,
-            extras={
-                "travel_cost_per_km_eur": travel_cost_km,
-                "qubo_size": n_qubits,
-                "penalty_weights": {
-                    "lambda_assignment": lam_assign,
-                    "lambda_capacity": lam_cap,
-                    "lambda_stock": lam_stock,
-                },
-                "energy_curve": energy_curve,
-                "best_iter": best_iter,
-                "n_iter": n_iter,
-                "n_inner": n_inner,
-                "T0": T0,
-                "Tf": Tf,
-                "n_restarts": n_restarts,
-                "feasibility_breakdown": {
-                    "assignment_violation": parts["assign_pen"],
-                    "capacity_violation": parts["cap_pen"],
-                    "stock_violation": parts["stock_pen"],
-                },
-            },
-        ),
+        "additional_output": _ao_preview,
         "benchmark": {
             "execution_cost": {"value": 1.0, "unit": "credits"},
             "time_elapsed": f"{elapsed}s",
