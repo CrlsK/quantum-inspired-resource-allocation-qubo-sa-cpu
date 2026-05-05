@@ -436,6 +436,35 @@ def run(input_data: dict, solver_params: dict, extra_arguments: dict) -> dict:
         },
     )
     _hl = _ao_preview.get("headline_numerics", {}) if isinstance(_ao_preview, dict) else {}
+
+    # Emit additional-output FILES (HTML dashboard + JSON snapshots)
+    try:
+        from talgo_dashboard import render_dashboard  # noqa: WPS433
+        from talgo_files import emit_files  # noqa: WPS433
+        files = [
+            {"name": "00_executive_summary.json",
+             "content": _ao_preview.get("executive_summary", {}),
+             "content_type": "application/json"},
+            {"name": "01_talgo_dashboard.html",
+             "content": render_dashboard("QUBO_SimulatedAnnealing", _ao_preview, float(objective)),
+             "content_type": "text/html"},
+            {"name": "02_presentation_pack.md",
+             "content": _ao_preview.get("presentation_pack", ""),
+             "content_type": "text/markdown"},
+            {"name": "03_shift_handover.json",
+             "content": _ao_preview.get("shift_handover", {}),
+             "content_type": "application/json"},
+            {"name": "04_compliance.json",
+             "content": _ao_preview.get("compliance", {}),
+             "content_type": "application/json"},
+            {"name": "05_convergence.json",
+             "content": _ao_preview.get("convergence_diagnostics", {}),
+             "content_type": "application/json"},
+        ]
+        _ao_preview["uploaded_files"] = emit_files(files)
+    except Exception as _exc:  # pragma: no cover
+        logger.warning(f"emit_files failed: {_exc}")
+
     return {
         "objective_value": round(float(objective), 4),
         "sla_on_time_rate": round(on_time / max(1, len(tasks)), 4),
